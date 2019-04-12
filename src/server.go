@@ -31,10 +31,25 @@ type Vote struct {
 	vote int
 }
 
+type UniqueIncrementIndex struct {
+	Uuid int  `json:"uuid"`
+	Index int `json:"index"`
+}
+
 type VoteStats struct {
 	Msgid int     `json:"msgid"`
 	Upvotes int   `json:"upvotes"`
 	Downvotes int `json:"downvotes"`
+}
+
+type RealVote struct {
+	Schoolid string `json:"schoolid"`
+	Amount int	`json:"amount"`
+}
+
+type VirtualVote struct {
+	Groupid string `json:"groupip"`
+	Amount int 	`json:"amount"`
 }
 
 type AVote struct {
@@ -57,12 +72,13 @@ type DBConnectionContext struct {
 	realvotestats *mongo.Collection
 	virtualvotes *mongo.Collection
 	virtualvotestats *mongo.Collection
+	uniqueindex *mongo.Collection
 }
 
 var votes []VoteStats
 
-
 func GetConfig() Config {
+
         newConf := Config{}
         newConf.useHttps = false
 	newConf.port = "9911"
@@ -85,6 +101,7 @@ func GetConfig() Config {
                 newConf.psk = os.Getenv("PSK")
         }
         return newConf
+
 }
 
 func connectToDB(conf Config) (*mongo.Client, error) {
@@ -100,6 +117,30 @@ func registerRealVote(conn *DBConnectionContext, schoolid string, amount int) (e
 func registerVirtualVote(conn *DBConnectionContext, groupid string, amount int) (error) {
 	_, err := conn.virtualvotes.InsertOne(context.TODO(), bson.D{{"groupid",groupid},{"amount",amount}})
 	return err
+}
+
+func getAndIncrementIndex(conn *DBConnectionContext) (int, error) {
+	var index UniqueIncrementIndex
+	err := conn.uniqueindex.FindOne(context.TODO(), bson.D{{"uuid",0}}).Decode(&index)
+	index.Index++
+	_, err = conn.uniqueindex.UpdateOne(context.TODO(), bson.D{{"uuid",0}}, bson.D{{"$set", bson.D{{"index",index.Index}}}})
+	if err != nil {
+		fmt.Println("Error en updateone");
+		fmt.Println(err)
+	}
+	return index.Index-1, err
+}
+
+func getRealVotes(conn *DBConnectionContext, schoolid string) ([]int, error) {
+	cursor, _ := conn.realvotes.Find(context.TODO(), bson.D{{"schoolid",schoolid}})
+	defer cursor.Close(context.TODO())
+	result := make([]int, 0)
+	for cursor.Next(context.TODO()) {
+		var realVote RealVote
+		cursor.Decode(&realVote)
+		result = append(result, realVote.Amount)
+	}
+	return result, nil
 }
 
 func registerImagineVote(conn *DBConnectionContext, msgid int, uuid string, vote int) {
@@ -189,7 +230,23 @@ func RealPostVote(w http.ResponseWriter, r *http.Request) {
 }
 
 func RealGetVotes(w http.ResponseWriter, r *http.Request) {
-
+	var amounts[] int
+	r.ParseForm()
+	if(r.FormValue("schoolid")=="") {
+		JSONResponseFromString(w, "{\"result\":\"schoolid not specified\"}")
+	} else {
+		amounts, _ = getRealVotes(&dbConnectionContext, r.FormValue("schoolid"))
+		listOfNumbers := "[ "
+		for index, value := range amounts {
+			if(index==0) {
+				listOfNumbers = listOfNumbers + strconv.Itoa(value)
+			} else {
+				listOfNumbers = listOfNumbers + ", " + strconv.Itoa(value)
+			}
+		}		
+		listOfNumbers = listOfNumbers + "]"
+		JSONResponseFromString(w, "{\"result\":"+listOfNumbers+"}")	
+	}
 }
 
 func VirtualPostVote(w http.ResponseWriter, r *http.Request) {
@@ -211,6 +268,11 @@ func VirtualGetVotes(w http.ResponseWriter, r *http.Request) {
 
 func ImaginePostVote(w http.ResponseWriter, r *http.Request) {
 	//params := mux.Vars(s)
+}
+
+func GetUniqueIndex(w http.ResponseWriter, r *http.Request) {
+	index, _ := getAndIncrementIndex(&dbConnectionContext)	
+	JSONResponseFromString(w, "{\"uniqueindex\":" + strconv.Itoa(index) + "}")
 }
 
 func ImagineGetVotes(w http.ResponseWriter, r *http.Request) {
@@ -254,16 +316,18 @@ func main() {
 	dbConnectionContext.imaginevotestats = client.Database("imagine").Collection("imaginevotestats")
 	dbConnectionContext.realvotes = client.Database("imagine").Collection("realbottlevotes")
 	dbConnectionContext.virtualvotes = client.Database("imagine").Collection("virtualbottlevotes")
+	dbConnectionContext.uniqueindex = client.Database("imagine").Collection("uniqueindex")
 
 	router := mux.NewRouter()
 
-	router.HandleFunc("/healthcheck", withPSKCheck(HCHandler)).Methods("GET")
+	router.HandleFunc("/healthcheck", HCHandler).Methods("GET")
 	router.HandleFunc("/imagine/votes", withPSKCheck(ImaginePostVote)).Methods("POST")
-	router.HandleFunc("/imagine/votes", withPSKCheck(ImagineGetVotes)).Methods("GET")
+	router.HandleFunc("/imagine/votes", ImagineGetVotes).Methods("GET")
 	router.HandleFunc("/real/votes", withPSKCheck(RealPostVote)).Methods("POST")
-	router.HandleFunc("/real/votes", withPSKCheck(RealGetVotes)).Methods("GET")
+	router.HandleFunc("/real/votes", RealGetVotes).Methods("GET")
 	router.HandleFunc("/virtual/votes", withPSKCheck(VirtualPostVote)).Methods("POST")
-	router.HandleFunc("/virtual/votes", withPSKCheck(VirtualGetVotes)).Methods("GET")
+	router.HandleFunc("/virtual/votes", VirtualGetVotes).Methods("GET")
+	router.HandleFunc("/uniqueindex", withPSKCheck(GetUniqueIndex)).Methods("GET")
 
 	srv := &http.Server {
 		Handler: router,
