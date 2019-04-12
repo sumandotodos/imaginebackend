@@ -79,16 +79,16 @@ func GetConfig() Config {
                 newConf.dbport = os.Getenv("DBPORT")
 	}
 	if(os.Getenv("DBHOST") != "") {
-                newConf.port = os.Getenv("DBHOST")
+                newConf.dbhost = os.Getenv("DBHOST")
 	}
 	if(os.Getenv("PSK") != "") {
-                newConf.port = os.Getenv("PSK")
+                newConf.psk = os.Getenv("PSK")
         }
         return newConf
 }
 
-func connectToDB() (*mongo.Client, error) {
-        clientOptions := options.Client().ApplyURI("mongodb://localhost:27017")
+func connectToDB(conf Config) (*mongo.Client, error) {
+        clientOptions := options.Client().ApplyURI("mongodb://" + conf.dbhost + ":" + conf.dbport)
         return mongo.Connect(context.TODO(), clientOptions)
 }
 
@@ -238,7 +238,10 @@ func withPSKCheck(next http.HandlerFunc) http.HandlerFunc {
 
 func main() {
 
-	client, err := connectToDB()
+	globalConfig = GetConfig()
+	fmt.Println(globalConfig)
+
+	client, err := connectToDB(globalConfig)
         err = client.Ping(context.TODO(), nil)
 
         if err != nil {
@@ -253,8 +256,6 @@ func main() {
 	dbConnectionContext.virtualvotes = client.Database("imagine").Collection("virtualbottlevotes")
 
 	router := mux.NewRouter()
-	globalConfig = GetConfig()
-	fmt.Println(globalConfig)	
 
 	router.HandleFunc("/healthcheck", withPSKCheck(HCHandler)).Methods("GET")
 	router.HandleFunc("/imagine/votes", withPSKCheck(ImaginePostVote)).Methods("POST")
