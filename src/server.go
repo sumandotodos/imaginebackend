@@ -149,6 +149,18 @@ func getRealVotes(conn *DBConnectionContext, schoolid string) ([]int, error) {
 	return result, nil
 }
 
+func getVirtualVotes(conn *DBConnectionContext, groupid string) ([]int, error) {
+	cursor, _ := conn.virtualvotes.Find(context.TODO(), bson.D{{"groupid", groupid}})
+	defer cursor.Close(context.TODO())
+	result := make([]int, 0)
+	for cursor.Next(context.TODO()) {
+		var virtualVote VirtualVote
+		cursor.Decode(&virtualVote)
+		result = append(result, virtualVote.Amount)
+	}
+	return result, nil
+}
+
 func getImagineVotes(conn *DBConnectionContext, msgid int) (int, int) {
 	var votes AllVotes
 	err := conn.imaginevotestats.FindOne(context.TODO(), bson.D{{"msgid", msgid}}).Decode(&votes)
@@ -270,6 +282,7 @@ func RealGetVotes(w http.ResponseWriter, r *http.Request) {
 }
 
 func VirtualPostVote(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("virtual post vote")
 	r.ParseForm()
 	groupid := r.FormValue("groupid")
 	amount, err := strconv.Atoi(r.FormValue("amount"))
@@ -283,7 +296,23 @@ func VirtualPostVote(w http.ResponseWriter, r *http.Request) {
 }
 
 func VirtualGetVotes(w http.ResponseWriter, r *http.Request) {
-
+	var amounts []int
+	r.ParseForm()
+	if r.FormValue("groupid") == "" {
+		JSONResponseFromString(w, "{\"result\":\"groupid not specified\"}")
+	} else {
+		amounts, _ = getVirtualVotes(&dbConnectionContext, r.FormValue("groupid"))
+		listOfNumbers := "[ "
+		for index, value := range amounts {
+			if index == 0 {
+				listOfNumbers = listOfNumbers + strconv.Itoa(value)
+			} else {
+				listOfNumbers = listOfNumbers + ", " + strconv.Itoa(value)
+			}
+		}
+		listOfNumbers = listOfNumbers + "]"
+		JSONResponseFromString(w, "{\"result\":"+listOfNumbers+"}")
+	}
 }
 
 func ImaginePostVote(w http.ResponseWriter, r *http.Request) {
@@ -326,6 +355,7 @@ func withPSKCheck(next http.HandlerFunc) http.HandlerFunc {
 		if psk == globalConfig.psk {
 			next.ServeHTTP(w, r)
 		} else {
+			fmt.Println("forbidden")
 			JSONResponseFromStringAndCode(w, "{\"result\":\"forbidden\"}", 403)
 		}
 	}
@@ -357,9 +387,9 @@ func main() {
 	router.HandleFunc("/imagine/votes", withPSKCheck(ImaginePostVote)).Methods("POST")
 	router.HandleFunc("/imagine/votes", withPSKCheck(ImagineGetVotes)).Methods("GET")
 	router.HandleFunc("/real/votes", withPSKCheck(RealPostVote)).Methods("POST")
-	router.HandleFunc("/real/votes", RealGetVotes).Methods("GET")
+	router.HandleFunc("/real/votes", withPSKCheck(RealGetVotes)).Methods("GET")
 	router.HandleFunc("/virtual/votes", withPSKCheck(VirtualPostVote)).Methods("POST")
-	router.HandleFunc("/virtual/votes", VirtualGetVotes).Methods("GET")
+	router.HandleFunc("/virtual/votes", withPSKCheck(VirtualGetVotes)).Methods("GET")
 	router.HandleFunc("/uniqueindex", withPSKCheck(GetUniqueIndex)).Methods("GET")
 
 	srv := &http.Server{
