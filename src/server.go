@@ -457,6 +457,12 @@ func withPSKCheck(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func Puttest(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	fmt.Println("Test param = " + r.FormValue("test"))
+	JSONResponseFromString(w, "Test param = " + r.FormValue("test"))
+}
+
 func main() {
 
 	globalConfig = GetConfig()
@@ -491,6 +497,7 @@ func main() {
 	router.HandleFunc("/virtual/bottle", withPSKCheck(VirtualGetType)).Methods("GET")
 	router.HandleFunc("/uniqueindex", withPSKCheck(GetUniqueIndex)).Methods("GET")
 	router.HandleFunc("/virtual/bottle", withPSKCheck(VirtualRemove)).Methods("DELETE")
+	router.HandleFunc("/virtual/votes", withPSKCheck(VirtualRemove)).Methods("DELETE")
 	router.HandleFunc("/virtual/bottle", withPSKCheck(VirtualSolve)).Methods("PUT")
 	router.HandleFunc("/virtual/votes", withPSKCheck(VirtualSolve)).Methods("PUT")
 
