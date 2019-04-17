@@ -487,6 +487,9 @@ func main() {
 	router := mux.NewRouter()
 
 	router.HandleFunc("/healthcheck", HCHandler).Methods("GET")
+	router.HandleFunc("/healthcheck", HCHandler).Methods("POST")
+	router.HandleFunc("/healthcheck", HCHandler).Methods("DELETE")
+	router.HandleFunc("/healthcheck", HCHandler).Methods("PUT")
 	router.HandleFunc("/imagine/votes", withPSKCheck(ImaginePostVote)).Methods("POST")
 	router.HandleFunc("/imagine/votes", withPSKCheck(ImagineGetVotes)).Methods("GET")
 	router.HandleFunc("/real/votes", withPSKCheck(RealPostVote)).Methods("POST")
