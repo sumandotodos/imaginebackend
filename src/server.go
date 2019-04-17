@@ -56,8 +56,13 @@ type VirtualVote struct {
 
 type VirtualBottleType struct {
 	Groupid string `json:"groupid"`
-	Type int	`json:"type"`
-	Solved bool	`json:"solved"`
+	Type    int    `json:"type"`
+	Solved  bool   `json:"solved"`
+}
+
+type RealBottle struct {
+	Schoolid string `json:"schoolid"`
+	Solved   bool   `json:"solved"`
 }
 
 type AVote struct {
@@ -73,14 +78,15 @@ type AllVotes struct {
 }
 
 type DBConnectionContext struct {
-	client           *mongo.Client
-	imaginevotes     *mongo.Collection
-	imaginevotestats *mongo.Collection
-	realvotes        *mongo.Collection
-	realvotestats    *mongo.Collection
-	virtualvotes     *mongo.Collection
-	virtualvotestats *mongo.Collection
-	uniqueindex      *mongo.Collection
+	client             *mongo.Client
+	imaginevotes       *mongo.Collection
+	imaginevotestats   *mongo.Collection
+	realvotes          *mongo.Collection
+	realvotestats      *mongo.Collection
+	realbottle		   *mongo.Collection
+	virtualvotes       *mongo.Collection
+	virtualvotestats   *mongo.Collection
+	uniqueindex        *mongo.Collection
 	virtualbottletypes *mongo.Collection
 }
 
@@ -128,44 +134,74 @@ func registerVirtualVote(conn *DBConnectionContext, groupid string, amount int) 
 	return err
 }
 
+func getRealBottle(conn *DBConnectionContext, schoolid string) (bool, error) {
+	var bt RealBottle
+	err := conn.realbottle.FindOne(context.TODO(), bson.D{{"_id", schoolid}}).Decode(&bt)
+	if err != nil {
+		return false, nil
+	}
+	return bt.Solved, err
+}
+
+
 func getVirtualBottle(conn *DBConnectionContext, groupid string) (bool, int, error) {
 	var bt VirtualBottleType
-	err := conn.virtualbottletypes.FindOne(context.TODO(), bson.D{{"_id",groupid}}).Decode(&bt)
+	err := conn.virtualbottletypes.FindOne(context.TODO(), bson.D{{"_id", groupid}}).Decode(&bt)
 	if err != nil {
 		return false, -1, nil
 	}
 	return bt.Solved, bt.Type, err
 }
 
+func setRealBottle(conn *DBConnectionContext, schoolid string) error {
+	var bt RealBottle
+	err := conn.realbottle.FindOne(context.TODO(), bson.D{{"_id", schoolid}}).Decode(&bt)
+	if err != nil {
+		_, _ = conn.realbottle.InsertOne(context.TODO(), bson.D{{"_id", schoolid}, {"solved", false}})
+	} 
+	return err
+}
+
 func setVirtualBottleType(conn *DBConnectionContext, groupid string, _type int) error {
 	var bt VirtualBottleType
-	err := conn.virtualbottletypes.FindOne(context.TODO(), bson.D{{"_id",groupid}}).Decode(&bt)
+	err := conn.virtualbottletypes.FindOne(context.TODO(), bson.D{{"_id", groupid}}).Decode(&bt)
 	if err != nil {
-		_, _ = conn.virtualbottletypes.InsertOne(context.TODO(), bson.D{{"_id", groupid}, {"type",_type}, {"solved", false}})
+		_, _ = conn.virtualbottletypes.InsertOne(context.TODO(), bson.D{{"_id", groupid}, {"type", _type}, {"solved", false}})
 	} else {
 		_, _ = conn.uniqueindex.UpdateOne(context.TODO(), bson.D{{"_id", groupid}}, bson.D{{"$set", bson.D{{"type", _type}}}})
 	}
 	return err
 }
 
-func setVirtualBottleSolved(conn *DBConnectionContext, groupid string) error {
-	var bt VirtualBottleType
-        err := conn.virtualbottletypes.FindOne(context.TODO(), bson.D{{"_id",groupid}}).Decode(&bt)
-        if err != nil {
-		fmt.Println("setVirtualBottleSolved: insertamos uno nuevo")
-                _, _ = conn.virtualbottletypes.InsertOne(context.TODO(), bson.D{{"_id", groupid}, {"type",-1}, {"solved", true}})
-        } else {
-		fmt.Println("setVirtualBottleSolved: updateamos")
-                updateRes, err2 := conn.virtualbottletypes.UpdateOne(context.TODO(), bson.D{{"_id", groupid}}, bson.D{{"$set", bson.D{{"solved", true}}}})
-        	fmt.Println(updateRes)
-		fmt.Println(err2)
+func setRealBottleSolved(conn *DBConnectionContext, schoolid string) error {
+	var bt RealBottle
+	err := conn.realbottle.FindOne(context.TODO(), bson.D{{"_id", schoolid}}).Decode(&bt)
+	if err != nil {
+		fmt.Println("(2)")
+		_, _ = conn.realbottle.InsertOne(context.TODO(), bson.D{{"_id", schoolid}, {"solved", true}})
+	} else {
+		fmt.Println("(3)")
+		_, _ = conn.realbottle.UpdateOne(context.TODO(), bson.D{{"_id", schoolid}}, bson.D{{"$set", bson.D{{"solved", true}}}})
+		
 	}
-        return err
+	return err
 }
 
-func removeVirtualBottle(conn *DBConnectionContext, groupid string) (error) {
-	conn.virtualbottletypes.DeleteMany(context.TODO(), bson.D{{"_id",groupid}})
-	conn.virtualvotes.DeleteMany(context.TODO(), bson.D{{"groupid",groupid}})
+func setVirtualBottleSolved(conn *DBConnectionContext, groupid string) error {
+	var bt VirtualBottleType
+	err := conn.virtualbottletypes.FindOne(context.TODO(), bson.D{{"_id", groupid}}).Decode(&bt)
+	if err != nil {
+		_, _ = conn.virtualbottletypes.InsertOne(context.TODO(), bson.D{{"_id", groupid}, {"type", -1}, {"solved", true}})
+	} else {
+		_, _ = conn.virtualbottletypes.UpdateOne(context.TODO(), bson.D{{"_id", groupid}}, bson.D{{"$set", bson.D{{"solved", true}}}})
+		
+	}
+	return err
+}
+
+func removeVirtualBottle(conn *DBConnectionContext, groupid string) error {
+	conn.virtualbottletypes.DeleteMany(context.TODO(), bson.D{{"_id", groupid}})
+	conn.virtualvotes.DeleteMany(context.TODO(), bson.D{{"groupid", groupid}})
 	return nil
 }
 
@@ -296,6 +332,16 @@ func JSONResponseFromStringAndCode(w http.ResponseWriter, res string, status int
 	io.WriteString(w, res)
 }
 
+func RealSetGame(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	if r.FormValue("schoolid") == "" {
+		JSONResponseFromString(w, "{\"result\":\"schoolid not specified\"}")
+	} else {
+		_ = setRealBottle(&dbConnectionContext, r.FormValue("schoolid"))
+		JSONResponseFromString(w, "{\"result\":\"OK\"}")
+	}
+}
+
 func RealPostVote(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	schoolid := r.FormValue("schoolid")
@@ -315,6 +361,7 @@ func RealGetVotes(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("schoolid") == "" {
 		JSONResponseFromString(w, "{\"result\":\"schoolid not specified\"}")
 	} else {
+		solved, _ := getRealBottle(&dbConnectionContext, r.FormValue("schoolid"))
 		amounts, _ = getRealVotes(&dbConnectionContext, r.FormValue("schoolid"))
 		listOfNumbers := "[ "
 		for index, value := range amounts {
@@ -325,7 +372,7 @@ func RealGetVotes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		listOfNumbers = listOfNumbers + "]"
-		JSONResponseFromString(w, "{\"result\":"+listOfNumbers+"}")
+		JSONResponseFromString(w, "{\"solved\":"+strconv.FormatBool(solved)+", \"result\":"+listOfNumbers+"}")
 	}
 }
 
@@ -384,6 +431,21 @@ func VirtualGetType(w http.ResponseWriter, r *http.Request) {
 	} else {
 		_, _type, _ := getVirtualBottle(&dbConnectionContext, r.FormValue("groupid"))
 		JSONResponseFromString(w, "{\"result\":"+strconv.Itoa(_type)+"}")
+	}
+}
+
+func RealSolve(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	if r.FormValue("schoolid") == "" {
+		JSONResponseFromString(w, "{\"result\":\"schoolid not specified\"}")
+	} else {
+		fmt.Println("(1)")
+		err := setRealBottleSolved(&dbConnectionContext, r.FormValue("schoolid"))
+		if err == nil {
+			JSONResponseFromString(w, "{\"result\":\"OK\"}")
+		} else {
+			JSONResponseFromString(w, "{\"result\":\"Error\"}")
+		}
 	}
 }
 
@@ -460,7 +522,7 @@ func withPSKCheck(next http.HandlerFunc) http.HandlerFunc {
 func Puttest(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	fmt.Println("Test param = " + r.FormValue("test"))
-	JSONResponseFromString(w, "Test param = " + r.FormValue("test"))
+	JSONResponseFromString(w, "Test param = "+r.FormValue("test"))
 }
 
 func main() {
@@ -480,6 +542,7 @@ func main() {
 	dbConnectionContext.imaginevotes = client.Database("imagine").Collection("imaginevotes")
 	dbConnectionContext.imaginevotestats = client.Database("imagine").Collection("imaginevotestats")
 	dbConnectionContext.realvotes = client.Database("imagine").Collection("realbottlevotes")
+	dbConnectionContext.realbottle = client.Database("imagine").Collection("realbottles")
 	dbConnectionContext.virtualvotes = client.Database("imagine").Collection("virtualbottlevotes")
 	dbConnectionContext.uniqueindex = client.Database("imagine").Collection("uniqueindex")
 	dbConnectionContext.virtualbottletypes = client.Database("imagine").Collection("virtualbottletypes")
@@ -494,6 +557,10 @@ func main() {
 	router.HandleFunc("/imagine/votes", withPSKCheck(ImagineGetVotes)).Methods("GET")
 	router.HandleFunc("/real/votes", withPSKCheck(RealPostVote)).Methods("POST")
 	router.HandleFunc("/real/votes", withPSKCheck(RealGetVotes)).Methods("GET")
+	router.HandleFunc("/real/bottle", withPSKCheck(RealSetGame)).Methods("POST")
+	router.HandleFunc("/real/bottle", withPSKCheck(RealSolve)).Methods("PUT")
+	router.HandleFunc("/real/votes", withPSKCheck(RealSolve)).Methods("PUT")
+	//router.HandleFunc("/real/bottle", withPSKCheck(RealGetGame)).Methods("GET")
 	router.HandleFunc("/virtual/votes", withPSKCheck(VirtualPostVote)).Methods("POST")
 	router.HandleFunc("/virtual/votes", withPSKCheck(VirtualGetVotes)).Methods("GET")
 	router.HandleFunc("/virtual/bottle", withPSKCheck(VirtualSetType)).Methods("POST")
