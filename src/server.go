@@ -77,17 +77,22 @@ type AllVotes struct {
 	Downvotes int `json:"downvotes"`
 }
 
+type Message struct {
+	Text	  string `json:"text"`
+}
+
 type DBConnectionContext struct {
 	client             *mongo.Client
 	imaginevotes       *mongo.Collection
 	imaginevotestats   *mongo.Collection
 	realvotes          *mongo.Collection
 	realvotestats      *mongo.Collection
-	realbottle		   *mongo.Collection
+	realbottle	   *mongo.Collection
 	virtualvotes       *mongo.Collection
 	virtualvotestats   *mongo.Collection
 	uniqueindex        *mongo.Collection
 	virtualbottletypes *mongo.Collection
+	messages	   *mongo.Collection
 }
 
 var votes []VoteStats
@@ -245,6 +250,18 @@ func getVirtualVotes(conn *DBConnectionContext, groupid string) ([]int, error) {
 	return result, nil
 }
 
+func getMessagesFromIndex(conn *DBConnectionContext, fromInd int) ([]string, error) {
+	cursor, _ := conn.messages.Find(context.TODO(), bson.D{{"_id", bson.D{{"$gte", fromInd}}}})
+	defer cursor.Close(context.TODO())
+	result := make([]string, 0)
+	for cursor.Next(context.TODO()) {
+		var message Message
+		cursor.Decode(&message)
+		result = append(result, message.Text)
+	}
+	return result, nil
+}
+
 func getImagineVotes(conn *DBConnectionContext, msgid int) (int, int) {
 	var votes AllVotes
 	err := conn.imaginevotestats.FindOne(context.TODO(), bson.D{{"msgid", msgid}}).Decode(&votes)
@@ -280,8 +297,8 @@ func registerImagineVote(conn *DBConnectionContext, msgid int, vote int) float32
 
 	err := conn.imaginevotestats.FindOne(context.TODO(), bson.D{{"msgid", msgid}}).Decode(&votes)
 	if err != nil {
-		fmt.Println("No collection found, creating one...")
-		fmt.Println(err)
+		fmt.Println("No document found, creating one...")
+		//fmt.Println(err)
 		_, _ = conn.imaginevotestats.InsertOne(context.TODO(), bson.D{{"msgid", msgid}, {"upvotes", 0}, {"downvotes", 0}})
 	}
 
@@ -519,6 +536,24 @@ func withPSKCheck(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func GetMessages(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	fromMsg, err := strconv.Atoi(r.FormValue("from"))
+	if(err == nil) {
+		allMessages, _ := getMessagesFromIndex(&dbConnectionContext, fromMsg)
+		listOfMessages := "["
+		for index, value := range allMessages {
+                        if index == 0 {
+                                listOfMessages = listOfMessages + "\"" + value + "\""
+                        } else {
+                                listOfMessages = listOfMessages + ", " + "\"" + value + "\""
+                        }
+                }
+                listOfMessages = listOfMessages + "]"
+		JSONResponseFromString(w, "{\"result\":" + listOfMessages + "}")
+	}
+}
+
 func Puttest(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	fmt.Println("Test param = " + r.FormValue("test"))
@@ -546,6 +581,7 @@ func main() {
 	dbConnectionContext.virtualvotes = client.Database("imagine").Collection("virtualbottlevotes")
 	dbConnectionContext.uniqueindex = client.Database("imagine").Collection("uniqueindex")
 	dbConnectionContext.virtualbottletypes = client.Database("imagine").Collection("virtualbottletypes")
+	dbConnectionContext.messages = client.Database("imagine").Collection("messages")
 
 	router := mux.NewRouter()
 
@@ -570,6 +606,7 @@ func main() {
 	router.HandleFunc("/virtual/votes", withPSKCheck(VirtualRemove)).Methods("DELETE")
 	router.HandleFunc("/virtual/bottle", withPSKCheck(VirtualSolve)).Methods("PUT")
 	router.HandleFunc("/virtual/votes", withPSKCheck(VirtualSolve)).Methods("PUT")
+	router.HandleFunc("/messages", withPSKCheck(GetMessages)).Methods("GET")
 
 	srv := &http.Server{
 		Handler:      router,
