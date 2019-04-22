@@ -9,7 +9,7 @@ import (
 	"os"
 	"strconv"
 	"time"
-
+	"strings"
 	"github.com/gorilla/mux"
 
 	//"encoding/json"
@@ -18,6 +18,10 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+type SimpleId struct {
+	Simpleid  string `json:"simpleid"`
+}
 
 type Config struct {
 	useHttps bool
@@ -58,11 +62,14 @@ type VirtualBottleType struct {
 	Groupid string `json:"groupid"`
 	Type    int    `json:"type"`
 	Solved  bool   `json:"solved"`
+	Deleted int    `json:"deleted"`
 }
 
 type RealBottle struct {
 	Schoolid string `json:"schoolid"`
 	Solved   bool   `json:"solved"`
+	Deleted  int	`json:"deleted"`
+	Realamount int  `json:"realamount"`
 }
 
 type AVote struct {
@@ -93,6 +100,7 @@ type DBConnectionContext struct {
 	uniqueindex        *mongo.Collection
 	virtualbottletypes *mongo.Collection
 	messages	   *mongo.Collection
+	deletedgroups	   *mongo.Collection
 }
 
 var votes []VoteStats
@@ -139,23 +147,33 @@ func registerVirtualVote(conn *DBConnectionContext, groupid string, amount int) 
 	return err
 }
 
-func getRealBottle(conn *DBConnectionContext, schoolid string) (bool, error) {
+func checkGroupHasBeenDeleted(conn *DBConnectionContext, group string) bool {
+	var simpleid SimpleId
+	err := conn.deletedgroups.FindOne(context.TODO(), bson.D{{"_id", group}}).Decode(&simpleid)
+	return err == nil
+}
+
+func setGroupHasBeenDeleted(conn *DBConnectionContext, group string) {
+	conn.deletedgroups.InsertOne(context.TODO(), bson.D{{"_id", group}})
+}
+
+func getRealBottle(conn *DBConnectionContext, schoolid string) (bool, int, int, error) {
 	var bt RealBottle
 	err := conn.realbottle.FindOne(context.TODO(), bson.D{{"_id", schoolid}}).Decode(&bt)
 	if err != nil {
-		return false, nil
+		return false, 0, 0, nil
 	}
-	return bt.Solved, err
+	return bt.Solved, bt.Deleted, bt.Realamount, err
 }
 
 
-func getVirtualBottle(conn *DBConnectionContext, groupid string) (bool, int, error) {
+func getVirtualBottle(conn *DBConnectionContext, groupid string) (bool, int, int, error) {
 	var bt VirtualBottleType
 	err := conn.virtualbottletypes.FindOne(context.TODO(), bson.D{{"_id", groupid}}).Decode(&bt)
 	if err != nil {
-		return false, -1, nil
+		return false, 0, -1, nil
 	}
-	return bt.Solved, bt.Type, err
+	return bt.Solved, bt.Deleted, bt.Type, err
 }
 
 func setRealBottle(conn *DBConnectionContext, schoolid string) error {
@@ -192,11 +210,24 @@ func setRealBottleSolved(conn *DBConnectionContext, schoolid string) error {
 	return err
 }
 
+func setVirtualBottleDeleted(conn *DBConnectionContext, groupid string) error {
+        var bt VirtualBottleType
+        err := conn.virtualbottletypes.FindOne(context.TODO(), bson.D{{"_id", groupid}}).Decode(&bt)
+        if err != nil {
+                _, _ = conn.virtualbottletypes.InsertOne(context.TODO(), bson.D{{"_id", groupid}, {"type", -1}, {"solved", true}, {"deleted", 1}})
+        } else {
+                _, _ = conn.virtualbottletypes.UpdateOne(context.TODO(), bson.D{{"_id", groupid}}, bson.D{{"$inc", bson.D{{"deleted", 1}}}})
+
+        }
+        return err
+}
+
 func setVirtualBottleSolved(conn *DBConnectionContext, groupid string) error {
 	var bt VirtualBottleType
 	err := conn.virtualbottletypes.FindOne(context.TODO(), bson.D{{"_id", groupid}}).Decode(&bt)
 	if err != nil {
-		_, _ = conn.virtualbottletypes.InsertOne(context.TODO(), bson.D{{"_id", groupid}, {"type", -1}, {"solved", true}})
+		fmt.Println(err)
+		_, _ = conn.virtualbottletypes.InsertOne(context.TODO(), bson.D{{"_id", groupid}, {"type", -1}, {"solved", true}, {"deleted", 0}})
 	} else {
 		_, _ = conn.virtualbottletypes.UpdateOne(context.TODO(), bson.D{{"_id", groupid}}, bson.D{{"$set", bson.D{{"solved", true}}}})
 		
@@ -378,7 +409,7 @@ func RealGetVotes(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("schoolid") == "" {
 		JSONResponseFromString(w, "{\"result\":\"schoolid not specified\"}")
 	} else {
-		solved, _ := getRealBottle(&dbConnectionContext, r.FormValue("schoolid"))
+		solved, deleted, realamount, _ := getRealBottle(&dbConnectionContext, r.FormValue("schoolid"))
 		amounts, _ = getRealVotes(&dbConnectionContext, r.FormValue("schoolid"))
 		listOfNumbers := "[ "
 		for index, value := range amounts {
@@ -389,7 +420,7 @@ func RealGetVotes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		listOfNumbers = listOfNumbers + "]"
-		JSONResponseFromString(w, "{\"solved\":"+strconv.FormatBool(solved)+", \"result\":"+listOfNumbers+"}")
+		JSONResponseFromString(w, "{\"solved\":"+strconv.FormatBool(solved)+", \"deleted\":"+strconv.Itoa(deleted)+", \"realamount\":"+strconv.Itoa(realamount)+", \"votes\":"+listOfNumbers+"}")
 	}
 }
 
@@ -413,7 +444,7 @@ func VirtualGetVotes(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("groupid") == "" {
 		JSONResponseFromString(w, "{\"result\":\"groupid not specified\"}")
 	} else {
-		solved, _type, _ := getVirtualBottle(&dbConnectionContext, r.FormValue("groupid"))
+		solved, deleted, _type, _ := getVirtualBottle(&dbConnectionContext, r.FormValue("groupid"))
 		amounts, _ = getVirtualVotes(&dbConnectionContext, r.FormValue("groupid"))
 		listOfNumbers := "[ "
 		for index, value := range amounts {
@@ -424,7 +455,7 @@ func VirtualGetVotes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		listOfNumbers = listOfNumbers + "]"
-		JSONResponseFromString(w, "{\"solved\":"+strconv.FormatBool(solved)+", \"type\":"+strconv.Itoa(_type)+", \"votes\":"+listOfNumbers+"}")
+		JSONResponseFromString(w, "{\"solved\":"+strconv.FormatBool(solved)+", \"deleted\":"+strconv.Itoa(deleted)+", \"type\":"+strconv.Itoa(_type)+", \"votes\":"+listOfNumbers+"}")
 	}
 }
 
@@ -446,7 +477,7 @@ func VirtualGetType(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("groupid") == "" {
 		JSONResponseFromString(w, "{\"result\":\"groupid not specified\"}")
 	} else {
-		_, _type, _ := getVirtualBottle(&dbConnectionContext, r.FormValue("groupid"))
+		_, _, _type, _ := getVirtualBottle(&dbConnectionContext, r.FormValue("groupid"))
 		JSONResponseFromString(w, "{\"result\":"+strconv.Itoa(_type)+"}")
 	}
 }
@@ -479,7 +510,7 @@ func VirtualSolve(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
-
+/*
 func VirtualRemove(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	if r.FormValue("groupid") == "" {
@@ -488,6 +519,19 @@ func VirtualRemove(w http.ResponseWriter, r *http.Request) {
 		_ = removeVirtualBottle(&dbConnectionContext, r.FormValue("groupid"))
 		JSONResponseFromString(w, "{\"result\":\"OK\"}")
 	}
+}*/
+func VirtualRemove(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+        if r.FormValue("groupid") == "" {
+                JSONResponseFromString(w, "{\"result\":\"groupid not specified\"}")
+        } else {
+                err := setVirtualBottleDeleted(&dbConnectionContext, r.FormValue("groupid"))
+                if err == nil {
+                        JSONResponseFromString(w, "{\"result\":\"OK\"}")
+                } else {
+                        JSONResponseFromString(w, "{\"result\":\"Error\"}")
+                }
+        }
 }
 
 func ImaginePostVote(w http.ResponseWriter, r *http.Request) {
@@ -560,6 +604,28 @@ func Puttest(w http.ResponseWriter, r *http.Request) {
 	JSONResponseFromString(w, "Test param = "+r.FormValue("test"))
 }
 
+func CheckDeletedGroups(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	groups := strings.Split(r.FormValue("groups"), ",")
+	result := "["
+	for i,g:= range groups {
+		isDeleted := checkGroupHasBeenDeleted(&dbConnectionContext, g)
+		if(i==0) {
+			result = result + strconv.FormatBool(isDeleted)
+		} else {
+			result = result + ", " + strconv.FormatBool(isDeleted)
+		}	
+	}
+	result = result + "]"
+	JSONResponseFromString(w, "{\"result\":" + result + "}")
+}
+
+func SetDeletedGroups(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	setGroupHasBeenDeleted(&dbConnectionContext, r.FormValue("groupid"))
+	JSONResponseFromString(w, "{\"result\":\"OK\"}")
+}
+
 func main() {
 
 	globalConfig = GetConfig()
@@ -582,6 +648,7 @@ func main() {
 	dbConnectionContext.uniqueindex = client.Database("imagine").Collection("uniqueindex")
 	dbConnectionContext.virtualbottletypes = client.Database("imagine").Collection("virtualbottletypes")
 	dbConnectionContext.messages = client.Database("imagine").Collection("messages")
+	dbConnectionContext.deletedgroups = client.Database("imagine").Collection("deletedgroups")
 
 	router := mux.NewRouter()
 
@@ -607,6 +674,8 @@ func main() {
 	router.HandleFunc("/virtual/bottle", withPSKCheck(VirtualSolve)).Methods("PUT")
 	router.HandleFunc("/virtual/votes", withPSKCheck(VirtualSolve)).Methods("PUT")
 	router.HandleFunc("/messages", withPSKCheck(GetMessages)).Methods("GET")
+	//router.HandleFunc("/virtual/deleted", withPSKCheck(CheckDeletedGroups)).Methods("GET")
+	//router.HandleFunc("/virtual/deleted", withPSKCheck(SetDeletedGroups)).Methods("POST")
 
 	srv := &http.Server{
 		Handler:      router,
