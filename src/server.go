@@ -486,7 +486,7 @@ func ImaginePostVote(w http.ResponseWriter, r *http.Request) {
 	if vote < 0 {
 		fraction = (1.0 - fractionUp)
 	}
-	JSONResponseFromString(w, "{\"same-percentage\":"+strconv.Itoa(int(fraction*100.0))+"}")
+	JSONResponseFromString(w, "{\"same_percentage\":"+strconv.Itoa(int(fraction*100.0))+"}")
 }
 
 func GetUniqueIndex(w http.ResponseWriter, r *http.Request) {
