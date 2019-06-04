@@ -84,6 +84,10 @@ type AllVotes struct {
 	Downvotes int `json:"downvotes"`
 }
 
+type Score struct {
+	Points   int  `json:"points"`
+}
+
 type Message struct {
 	Text	  string `json:"text"`
 }
@@ -101,6 +105,7 @@ type DBConnectionContext struct {
 	virtualbottletypes *mongo.Collection
 	messages	   *mongo.Collection
 	deletedgroups	   *mongo.Collection
+	points		   *mongo.Collection
 }
 
 var votes []VoteStats
@@ -133,8 +138,32 @@ func GetConfig() Config {
 }
 
 func connectToDB(conf Config) (*mongo.Client, error) {
-	clientOptions := options.Client().ApplyURI("mongodb://" + conf.dbhost + ":" + conf.dbport)
-	return mongo.Connect(context.TODO(), clientOptions)
+        clientOptions := options.Client().ApplyURI("mongodb://" + conf.dbhost + ":" + conf.dbport)
+        return mongo.Connect(context.TODO(), clientOptions)
+}
+
+func setDatabasePoints(conn *DBConnectionContext, uuid string, newscore int) error {
+	var sc Score
+	err := conn.points.FindOne(context.TODO(), bson.D{{"_id", uuid}}).Decode(&sc)
+	if(err == nil) {
+		_, err2 := conn.points.UpdateOne(context.TODO(), bson.D{{"_id", uuid}}, bson.D{{"$set", bson.D{{"points", newscore}}}})
+		return err2
+	} else {
+		_, err2 := conn.points.InsertOne(context.TODO(), bson.D{{"_id", uuid}, {"points", newscore}})
+		return err2
+	}
+	return err
+}
+
+func getDatabasePoints(conn *DBConnectionContext, uuid string) (int, error) {
+	var sc Score
+	err := conn.points.FindOne(context.TODO(), bson.D{{"_id", uuid}}).Decode(&sc)
+	if(err == nil) {
+		return sc.Points, nil
+	} else {
+		return 0, nil
+	}
+	return 0, err
 }
 
 func registerRealVote(conn *DBConnectionContext, schoolid string, amount int) error {
@@ -161,7 +190,7 @@ func getRealBottle(conn *DBConnectionContext, schoolid string) (bool, int, int, 
 	var bt RealBottle
 	err := conn.realbottle.FindOne(context.TODO(), bson.D{{"_id", schoolid}}).Decode(&bt)
 	if err != nil {
-		return false, 0, 0, nil
+		return false, 0, -1, nil
 	}
 	return bt.Solved, bt.Deleted, bt.Realamount, err
 }
@@ -410,17 +439,21 @@ func RealGetVotes(w http.ResponseWriter, r *http.Request) {
 		JSONResponseFromString(w, "{\"result\":\"schoolid not specified\"}")
 	} else {
 		solved, deleted, realamount, _ := getRealBottle(&dbConnectionContext, r.FormValue("schoolid"))
-		amounts, _ = getRealVotes(&dbConnectionContext, r.FormValue("schoolid"))
-		listOfNumbers := "[ "
-		for index, value := range amounts {
-			if index == 0 {
-				listOfNumbers = listOfNumbers + strconv.Itoa(value)
-			} else {
-				listOfNumbers = listOfNumbers + ", " + strconv.Itoa(value)
+		if realamount == -1 {
+			JSONResponseFromString(w, "{\"result\":\"Not found\"}")
+		} else {
+			amounts, _ = getRealVotes(&dbConnectionContext, r.FormValue("schoolid"))
+			listOfNumbers := "[ "
+			for index, value := range amounts {
+				if index == 0 {
+					listOfNumbers = listOfNumbers + strconv.Itoa(value)
+				} else {
+					listOfNumbers = listOfNumbers + ", " + strconv.Itoa(value)
+				}
 			}
+			listOfNumbers = listOfNumbers + "]"
+			JSONResponseFromString(w, "{\"solved\":"+strconv.FormatBool(solved)+", \"deleted\":"+strconv.Itoa(deleted)+", \"realamount\":"+strconv.Itoa(realamount)+", \"votes\":"+listOfNumbers+"}")
 		}
-		listOfNumbers = listOfNumbers + "]"
-		JSONResponseFromString(w, "{\"solved\":"+strconv.FormatBool(solved)+", \"deleted\":"+strconv.Itoa(deleted)+", \"realamount\":"+strconv.Itoa(realamount)+", \"votes\":"+listOfNumbers+"}")
 	}
 }
 
@@ -445,17 +478,21 @@ func VirtualGetVotes(w http.ResponseWriter, r *http.Request) {
 		JSONResponseFromString(w, "{\"result\":\"groupid not specified\"}")
 	} else {
 		solved, deleted, _type, _ := getVirtualBottle(&dbConnectionContext, r.FormValue("groupid"))
-		amounts, _ = getVirtualVotes(&dbConnectionContext, r.FormValue("groupid"))
-		listOfNumbers := "[ "
-		for index, value := range amounts {
-			if index == 0 {
-				listOfNumbers = listOfNumbers + strconv.Itoa(value)
-			} else {
-				listOfNumbers = listOfNumbers + ", " + strconv.Itoa(value)
+		if _type == -1 {
+			JSONResponseFromString(w, "{\"result\":\"Not found\"}")
+		} else {
+			amounts, _ = getVirtualVotes(&dbConnectionContext, r.FormValue("groupid"))
+			listOfNumbers := "[ "
+			for index, value := range amounts {
+				if index == 0 {
+					listOfNumbers = listOfNumbers + strconv.Itoa(value)
+				} else {
+					listOfNumbers = listOfNumbers + ", " + strconv.Itoa(value)
+				}
 			}
+			listOfNumbers = listOfNumbers + "]"
+			JSONResponseFromString(w, "{\"solved\":"+strconv.FormatBool(solved)+", \"deleted\":"+strconv.Itoa(deleted)+", \"type\":"+strconv.Itoa(_type)+", \"votes\":"+listOfNumbers+"}")
 		}
-		listOfNumbers = listOfNumbers + "]"
-		JSONResponseFromString(w, "{\"solved\":"+strconv.FormatBool(solved)+", \"deleted\":"+strconv.Itoa(deleted)+", \"type\":"+strconv.Itoa(_type)+", \"votes\":"+listOfNumbers+"}")
 	}
 }
 
@@ -620,6 +657,22 @@ func CheckDeletedGroups(w http.ResponseWriter, r *http.Request) {
 	JSONResponseFromString(w, "{\"result\":" + result + "}")
 }
 
+func GetPoints(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	fmt.Println("Getting points for " + vars["uuid"])
+	points, _ := getDatabasePoints(&dbConnectionContext, vars["uuid"])
+	JSONResponseFromString(w, "{\"points\":"+strconv.Itoa(points)+"}")
+}
+
+func SetPoints(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	vars := mux.Vars(r)
+	fmt.Println("Setting " + r.FormValue("newscore") + " points for " + vars["uuid"])
+	newscore, _ := strconv.Atoi(r.FormValue("newscore"))
+	_ = setDatabasePoints(&dbConnectionContext, vars["uuid"], newscore)
+	JSONResponseFromString(w, "{\"points\":"+r.FormValue("newscore")+"}")
+}
+
 func SetDeletedGroups(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	setGroupHasBeenDeleted(&dbConnectionContext, r.FormValue("groupid"))
@@ -649,6 +702,7 @@ func main() {
 	dbConnectionContext.virtualbottletypes = client.Database("imagine").Collection("virtualbottletypes")
 	dbConnectionContext.messages = client.Database("imagine").Collection("messages")
 	dbConnectionContext.deletedgroups = client.Database("imagine").Collection("deletedgroups")
+	dbConnectionContext.points = client.Database("imagine").Collection("points")
 
 	router := mux.NewRouter()
 
@@ -674,6 +728,8 @@ func main() {
 	router.HandleFunc("/virtual/bottle", withPSKCheck(VirtualSolve)).Methods("PUT")
 	router.HandleFunc("/virtual/votes", withPSKCheck(VirtualSolve)).Methods("PUT")
 	router.HandleFunc("/messages", withPSKCheck(GetMessages)).Methods("GET")
+	router.HandleFunc("/points/{uuid}", withPSKCheck(GetPoints)).Methods("GET")
+	router.HandleFunc("/points/{uuid}", withPSKCheck(SetPoints)).Methods("PUT")
 	//router.HandleFunc("/virtual/deleted", withPSKCheck(CheckDeletedGroups)).Methods("GET")
 	//router.HandleFunc("/virtual/deleted", withPSKCheck(SetDeletedGroups)).Methods("POST")
 
