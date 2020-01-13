@@ -31,6 +31,16 @@ type Config struct {
 	psk      string
 }
 
+type Questionnaire struct {
+	Question1 	int 	`bson:"question1"`
+	Question2 	int 	`bson:"question2"`
+	Question3 	int 	`bson:"question3"`
+	YouAre 		int	`bson:"youare"`
+	Name 		string	`bson:"name"`
+	School 		string	`bson:"school"`
+	Address 	string	`bson:"address"`
+}
+
 type Vote struct {
 	uuid  string
 	msgid int
@@ -106,6 +116,7 @@ type DBConnectionContext struct {
 	messages	   *mongo.Collection
 	deletedgroups	   *mongo.Collection
 	points		   *mongo.Collection
+	questionnaires	   *mongo.Collection
 }
 
 var votes []VoteStats
@@ -169,6 +180,11 @@ func getDatabasePoints(conn *DBConnectionContext, uuid string) (int, error) {
 func registerRealVote(conn *DBConnectionContext, schoolid string, amount int) error {
 	_, err := conn.realvotes.InsertOne(context.TODO(), bson.D{{"schoolid", schoolid}, {"amount", amount}})
 	return err
+}
+
+func registerQuestionnaire(conn *DBConnectionContext, q *Questionnaire) error {
+	_, err := conn.questionnaires.InsertOne(context.TODO(), q)
+	return err 
 }
 
 func registerVirtualVote(conn *DBConnectionContext, groupid string, amount int) error {
@@ -679,6 +695,20 @@ func SetDeletedGroups(w http.ResponseWriter, r *http.Request) {
 	JSONResponseFromString(w, "{\"result\":\"OK\"}")
 }
 
+func PostQuestionnaire(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	q := &Questionnaire{}
+        q.Question1, _ = strconv.Atoi(r.FormValue("Question1"))
+        q.Question2, _ = strconv.Atoi(r.FormValue("Question2"))
+        q.Question3, _ = strconv.Atoi(r.FormValue("Question3"))
+	q.YouAre, _ = strconv.Atoi(r.FormValue("YouAre"))
+	q.Name = r.FormValue("Name")
+	q.School = r.FormValue("School")
+	q.Address = r.FormValue("Address")
+	registerQuestionnaire(&dbConnectionContext, q)
+        JSONResponseFromString(w, "{\"result\":\"success\"}")	
+}
+
 func main() {
 
 	globalConfig = GetConfig()
@@ -703,6 +733,7 @@ func main() {
 	dbConnectionContext.messages = client.Database("imagine").Collection("messages")
 	dbConnectionContext.deletedgroups = client.Database("imagine").Collection("deletedgroups")
 	dbConnectionContext.points = client.Database("imagine").Collection("points")
+	dbConnectionContext.questionnaires = client.Database("imagine").Collection("questionnaires")
 
 	router := mux.NewRouter()
 
@@ -710,6 +741,7 @@ func main() {
 	router.HandleFunc("/healthcheck", HCHandler).Methods("POST")
 	router.HandleFunc("/healthcheck", HCHandler).Methods("DELETE")
 	router.HandleFunc("/healthcheck", HCHandler).Methods("PUT")
+	router.HandleFunc("/questionnaire", withPSKCheck(PostQuestionnaire)).Methods("POST")
 	router.HandleFunc("/imagine/votes", withPSKCheck(ImaginePostVote)).Methods("POST")
 	router.HandleFunc("/imagine/votes", withPSKCheck(ImagineGetVotes)).Methods("GET")
 	router.HandleFunc("/real/votes", withPSKCheck(RealPostVote)).Methods("POST")
